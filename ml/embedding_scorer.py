@@ -1,14 +1,12 @@
+import os
+import math
 from typing import Dict, Any, List
 
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+import requests
 
 
-MODEL_NAME = "all-MiniLM-L6-v2"
-
-model = SentenceTransformer(
-    MODEL_NAME
-)
+OLLAMA_API_URL = "https://ollama.com/api/embed"
+OLLAMA_EMBED_MODEL = "nomic-embed-text"
 
 
 def build_profile_text(
@@ -17,14 +15,13 @@ def build_profile_text(
     return " ".join(
         document.strip()
         for document in profile_documents
-        if document
-        and document.strip()
+        if document and document.strip()
     )
 
 
 def build_job_text(
     job: Dict[str, Any],
-    job_keywords: List[str]
+    job_keywords: List[str],
 ) -> str:
     parts = []
 
@@ -52,6 +49,112 @@ def build_job_text(
     )
 
 
+def get_embedding(
+    text: str
+) -> List[float]:
+    api_key = os.getenv(
+        "OLLAMA_API_KEY"
+    )
+
+    if not api_key:
+        raise ValueError(
+            "OLLAMA_API_KEY is missing."
+        )
+
+    response = requests.post(
+        OLLAMA_API_URL,
+        headers={
+            "Authorization":
+                f"Bearer {api_key}",
+
+            "Content-Type":
+                "application/json",
+        },
+        json={
+            "model":
+                OLLAMA_EMBED_MODEL,
+
+            "input":
+                text,
+        },
+        timeout=60,
+    )
+
+    if not response.ok:
+        raise ValueError(
+            f"Ollama embedding request failed: "
+            f"{response.status_code} "
+            f"{response.text}"
+        )
+
+    data = response.json()
+
+    embeddings = (
+        data.get(
+            "embeddings"
+        )
+    )
+
+    if (
+        not embeddings
+        or not isinstance(
+            embeddings,
+            list
+        )
+    ):
+        raise ValueError(
+            "Ollama returned no embedding."
+        )
+
+    return embeddings[0]
+
+
+def cosine_similarity(
+    a: List[float],
+    b: List[float],
+) -> float:
+    if len(a) != len(b):
+        raise ValueError(
+            "Embedding dimensions do not match."
+        )
+
+    dot_product = sum(
+        x * y
+        for x, y in zip(
+            a,
+            b
+        )
+    )
+
+    magnitude_a = math.sqrt(
+        sum(
+            x * x
+            for x in a
+        )
+    )
+
+    magnitude_b = math.sqrt(
+        sum(
+            y * y
+            for y in b
+        )
+    )
+
+    if (
+        magnitude_a == 0
+        or magnitude_b == 0
+    ):
+        return 0.0
+
+    return (
+        dot_product
+        / (
+            magnitude_a
+            * magnitude_b
+        )
+    )
+
+
 def score_semantic_similarity(
     job: Dict[str, Any],
     job_keywords: List[str],
@@ -76,31 +179,31 @@ def score_semantic_similarity(
             "Profile text is empty."
         )
 
-    embeddings = model.encode(
-        [
-            job_text,
-            profile_text,
-        ],
-        normalize_embeddings=True,
+    job_embedding = get_embedding(
+        job_text
+    )
+
+    profile_embedding = get_embedding(
+        profile_text
     )
 
     similarity = cosine_similarity(
-        [embeddings[0]],
-        [embeddings[1]],
-    )[0][0]
+        job_embedding,
+        profile_embedding,
+    )
 
     semantic_score = (
-        float(similarity)
+        similarity
         * 100
     )
 
     return {
         "embedding_model":
-            MODEL_NAME,
+            OLLAMA_EMBED_MODEL,
 
         "cosine_similarity":
             round(
-                float(similarity),
+                similarity,
                 4
             ),
 
